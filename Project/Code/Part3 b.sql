@@ -1,0 +1,1 @@
+select if (not exists (select * from Penna where Day(Timestamp)>11 or Day(Timestamp)<3),"True","False")

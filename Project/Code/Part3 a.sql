@@ -1,0 +1,1 @@
+select if (not exists(select * from Penna where totalvotes<Biden+Trump),"True","False")

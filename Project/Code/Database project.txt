@@ -1,0 +1,698 @@
+Part 1
+FDs: 
+precinct->geo, locality,state
+precinct, Timestamp->geo, locality,state, totalvotes, Biden, Trump
+
+Penna is not in BCNF because precinct is not super key
+use testdb;
+Drop table if exists Penna2;
+Drop table if exists Penna2copy;
+Drop table if exists Penna1;
+Drop table if exists Penna1copy;
+
+CREATE TABLE Penna1 AS (SELECT distinct t.precinct,t.geo,t.locality,t.state FROM testdb.penna t);
+CREATE TABLE Penna1copy AS (SELECT distinct t.precinct,t.geo,t.locality,t.state FROM testdb.penna t);
+CREATE TABLE Penna2 AS (SELECT distinct t.Timestamp,t.precinct, t.totalvotes, t.Biden,t.Trump FROM testdb.penna t);
+CREATE TABLE Penna2copy AS (SELECT distinct t.Timestamp,t.precinct, t.totalvotes, t.Biden,t.Trump FROM testdb.penna t);
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+Part 2
+1 The precinct
+a)
+drop procedure if exists Winner;
+DELIMITER //
+CREATE PROCEDURE Winner(
+IN precinct VARCHAR(255))
+BEGIN
+select 
+CASE
+    WHEN Trump>Biden THEN "Trump"
+    WHEN Trump<Biden THEN "Biden"
+    ELSE "Draw"
+END AS Winner,
+CASE
+    WHEN Trump>Biden THEN Trump/totalvotes*100
+    WHEN Trump<Biden THEN Biden/totalvotes*100
+    ELSE "Draw"
+END AS 'Percentage(%)',
+totalvotes
+FROM testdb.penna p where p.precinct=precinct and timestamp in (select max(timestamp) from Penna);
+
+END //
+DELIMITER ;
+
+call Winner('520 E PIKELAND 2')
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+b)
+drop procedure if exists Rankall;
+DELIMITER //
+CREATE PROCEDURE Rankall(
+IN precinct VARCHAR(255))
+BEGIN
+select ranking from (
+SELECT p.precinct, rank() 
+OVER ( order by p.totalvotes desc ) 
+AS 'ranking' 
+FROM testdb.penna p where  timestamp in (select max(timestamp) from Penna)
+) a where a.precinct=precinct;
+END //
+DELIMITER ;
+
+call Rankall('033 W BRADFORD 5')
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+c)
+drop procedure if exists Rankcounty;
+DELIMITER //
+CREATE PROCEDURE Rankcounty(
+IN precinct VARCHAR(255))
+BEGIN
+select ranking from(
+SELECT p.locality, p.precinct, p.totalvotes,rank() 
+OVER (partition by p.locality order by p.totalvotes desc ) 
+AS 'ranking' 
+FROM testdb.penna p where  timestamp in (select max(timestamp) from Penna)) a
+where
+a.precinct=precinct;
+END //
+DELIMITER ;
+
+call Rankcounty('033 W BRADFORD 5')
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+d)
+drop procedure if exists PlotPrecinct;
+DELIMITER //
+CREATE PROCEDURE PlotPrecinct(
+IN Pre VARCHAR(255))
+Begin
+select timestamp, Trump from penna where precinct=Pre order by timestamp;
+select timestamp, Biden from penna where precinct=Pre order by timestamp;
+select timestamp, totalvotes from penna where precinct=Pre order by timestamp;
+End //
+DELIMITER ;
+call PlotPrecinct('Adams Township - Dunlo Voting Precinct')
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+e)
+drop procedure if exists EarlistPrecinct;
+DELIMITER //
+CREATE PROCEDURE EarlistPrecinct(
+IN vote_count VARCHAR(255))
+BEGIN
+select precinct, totalvotes,timestamp from( 
+select precinct,totalvotes,timestamp from penna where timestamp in (
+select Min(t) from (
+SELECT Min(p.timestamp) as t
+FROM testdb.penna p
+where p.totalvotes>=vote_count) a)
+and totalvotes>=vote_count) copy1
+where totalvotes in (
+select max(totalvotes) from (
+select precinct,totalvotes,timestamp from penna where timestamp in (
+select Min(t) from (
+SELECT Min(p.timestamp) as t
+FROM testdb.penna p
+where p.totalvotes>=vote_count) a)
+and totalvotes>=vote_count) copy2
+)
+;
+END //
+DELIMITER ;
+
+call EarlistPrecinct(100)
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+2
+a)
+drop procedure if exists PrecinctsWon;
+DELIMITER //
+CREATE PROCEDURE PrecinctsWon(
+IN candidate VARCHAR(255))
+BEGIN
+select precinct,totalvotes,diff from(
+select precinct, totalvotes,timestamp,
+CASE
+    WHEN candidate="Trump" THEN Trump-Biden
+    WHEN candidate="Biden" THEN Biden-Trump
+    ELSE 0
+END as 'diff'
+from Penna) a
+where diff>0 and timestamp in (select max(timestamp) from Penna)
+order by diff
+;
+END //
+DELIMITER ;
+call PrecinctsWon("Trump")
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+b)
+drop procedure if exists PrecinctsWonCount;
+DELIMITER //
+CREATE PROCEDURE PrecinctsWonCount(
+IN candidate VARCHAR(255))
+BEGIN
+select count(precinct) from(
+select precinct, totalvotes,timestamp,
+CASE
+    WHEN candidate="Trump" THEN Trump-Biden
+    WHEN candidate="Biden" THEN Biden-Trump
+    ELSE 0
+END as 'diff'
+from Penna) a
+where diff>0 and timestamp in (select max(timestamp) from Penna)
+;
+END //
+DELIMITER ;
+
+call PrecinctsWonCount("Biden")
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+c)
+drop procedure if exists PrecinctsFullLead;
+DELIMITER //
+CREATE PROCEDURE PrecinctsFullLead(
+IN candidate VARCHAR(255))
+BEGIN
+select distinct precinct from Penna p
+where not exists(
+select * from(
+select precinct, totalvotes,Trump,Biden,
+CASE
+    WHEN candidate="Trump" THEN Trump-Biden
+    WHEN candidate="Biden" THEN Biden-Trump
+    ELSE 0
+END as 'diff'
+from Penna) a 
+where (a.diff <=0 and not (a.Biden=0 and a.Trump=0))and p.precinct=a.precinct)
+;
+END //
+DELIMITER ;
+
+call PrecinctsFullLead("Biden")
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+d)
+drop procedure if exists PlotCandidate;
+DELIMITER //
+CREATE PROCEDURE PlotCandidate(
+IN Can VARCHAR(255))
+Begin
+Case when Can="Biden" then select timestamp, sum(Biden) from penna group by timestamp order by timestamp;
+     when Can="Trump" then select timestamp, sum(Trump) from penna group by timestamp order by timestamp;
+end case;
+End //
+DELIMITER ;
+call PlotCandidate('Trump');
+call PlotCandidate('Biden');
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+e)
+drop procedure if exists PrecinctsWonCategory;
+DELIMITER //
+CREATE PROCEDURE PrecinctsWonCategory()
+BEGIN
+call PrecinctsWonTownships();
+END //
+DELIMITER ;
+
+drop procedure if exists PrecinctsWonTownships;
+DELIMITER //
+CREATE PROCEDURE PrecinctsWonTownships()
+BEGIN
+select sum(Trump),sum(Biden),abs(sum(Trump)-sum(Biden)) as "diff",
+CASE
+    WHEN sum(Trump)-sum(Biden)>0 THEN "Trump"
+    WHEN sum(Trump)-sum(Biden)<0 THEN "Biden"
+    ELSE "Draw"
+END as 'Winner'
+from Penna where 
+precinct in (SELECT precinct from Penna where precinct like '%Township%') and timestamp in (select Max(timestamp) from Penna);
+END //
+DELIMITER ;
+
+call PrecinctsWonCategory()
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+3
+a)
+drop procedure if exists TotalVotes;
+DELIMITER //
+CREATE PROCEDURE TotalVotes(
+IN ti VARCHAR(255), category varchar(255) )
+BEGIN
+select precinct,
+case
+     When category="ALL" Then totalvotes
+     WHen category="Trump" Then trump
+     When category="Biden" then Biden
+     else Biden
+End as count
+from penna where timestamp=ti 
+order by 
+case
+     When category="ALL" Then totalvotes
+     WHen category="Trump" Then trump
+     When category="Biden" then Biden
+     else Biden
+ENd;
+END //
+DELIMITER ;
+
+call TotalVotes('2020-11-04 03:58:36',"Biden")
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+b)
+
+drop procedure if exists GainDelta;
+DELIMITER //
+CREATE PROCEDURE GainDelta(
+IN ti VARCHAR(255))
+BEGIN
+
+drop table if exists Times;
+create table Times as (select distinct Timestamp, sum(totalvotes) as totalv from Penna group by Timestamp );
+
+select TimestampDiff(Second,t.timestamp,ti) as Delta,tt.totalv-t.totalv as Gain,
+(tt.totalv-t.totalv)/(TimestampDiff(Second,t.timestamp,ti)) as ratio
+ from Times t join Times tt where
+t.Timestamp in (select max(timestamp) from Penna where timestamp<ti) and tt.timestamp=ti
+;
+END //
+DELIMITER ;
+
+call GainDelta('2020-11-04 03:58:36')
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+c)
+drop procedure if exists RankTimestamp;
+DELIMITER //
+CREATE PROCEDURE RankTimestamp()
+BEGIN
+drop table if exists Times;
+create table Times as (select distinct Timestamp, sum(totalvotes) as totalv from Penna group by Timestamp );
+
+select tt.timestamp, TimestampDiff(Second,t.timestamp,tt.timestamp) as Delta,tt.totalv-t.totalv as Gain,
+(tt.totalv-t.totalv)/(TimestampDiff(Second,t.timestamp,tt.timestamp)) as ratio
+ from Times t join Times tt where
+t.Timestamp in (select max(timestamp) from Times where timestamp<tt.timestamp)
+order by ratio desc
+;
+END //
+DELIMITER ;
+
+call RankTimestamp()
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+d)
+drop procedure if exists VotesPerDay;
+DELIMITER //
+CREATE PROCEDURE VotesPerDay(in d varchar(255))
+BEGIN
+select d as Day, timestamp,precinct,Biden,Trump,totalvotes from Penna where Day(Timestamp)=d
+;
+END //
+DELIMITER ;
+
+call VotesPerDay("09")
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+4
+in 3c,we can see that in '2020-11-04 07:08:18', the gain/delta ratio is 461. 
+That means there would be 461 votes for every second as average in the time period.
+This is suspicious because it is weird that many people vote at the same time.
+It is possible that many invalid votes camfoulage to the real votes.
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+Part3
+a)
+select if (not exists(select * from Penna where totalvotes<Biden+Trump),"True","False")
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+b)
+select if (not exists (select * from Penna where Day(Timestamp)>11 or Day(Timestamp)<3),"True","False")
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+c)
+Drop table if exists PennaS;
+Drop table if exists PennaT;
+create table PennaS as (select precinct, Timestamp, totalvotes,biden,trump from Penna where timestamp<"2020-11-05 00:00:00");
+create table PennaT as (select precinct, Timestamp, totalvotes,biden,trump from Penna where timestamp>"2020-11-05 00:00:00");
+create index indprec on PennaS(precinct);
+create index indprecc on PennaT(precinct);
+create index indtim on PennaS(Timestamp);
+create index indtimm on PennaT(Timestamp);
+select if (not exists(select * from PennaS s, PennaT t where  s.precinct =t.precinct
+ and (s.totalvotes > t.totalvotes or s.Biden>t.Biden or s.Trump>t.trump)) ,"True","False")
+
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+Part 4
+ALTER TABLE penna1copy
+ADD PRIMARY KEY (precinct);
+ALTER TABLE penna2copy
+ADD FOREIGN KEY (precinct) REFERENCES penna1copy (precinct);
+INSERT INTO penna2copy(Biden) 
+VALUES(33);
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+drop procedure if exists CheckInsert;
+DELIMITER //
+CREATE PROCEDURE CheckInsert(
+IN 
+ttimestamp DATETIME , 
+  sstate VARCHAR(45) , 
+  llocality VARCHAR(45) , 
+  pprecinct VARCHAR(45) , 
+  ggeo VARCHAR(45) , 
+  ttotalvotes INT , 
+  BBiden INT , 
+  TTrump INT,
+  ttable varchar(45))
+sp:BEGIN
+if ttable="penna1" then
+if exists(select * from penna1 where precinct=pprecinct and (locality!=llocality or geo!=ggeo or state!=sstate)) then
+ select "insertion rejected due to constraint violation for primary key";
+leave sp;
+end if;
+select "Insertion accepted";
+INSERT INTO `penna1`(state,locality,precinct,geo) 
+VALUES(sstate,llocality,pprecinct,ggeo);
+leave sp;
+end if;
+
+if ttable="penna2" then
+if exists(select * from penna2 where precinct=pprecinct and timestamp=ttimestamp and 
+(totalvotes!=ttotalvotes or Biden!=BBiden or TTrump!=Trump)) then
+ select "insertion rejected due to constraint violation for primary key";
+leave sp;
+ end if;
+ if pprecinct not in (select precinct from penna1) then
+ select "insertion rejected due to constraint violation for foreign key";
+ leave sp;
+ end if;
+ if TTrump+BBiden>ttotalvotes then
+ select "insertion rejected due to constraint violation for Part3 a";
+ leave sp;
+ end if;
+ if ttimestamp>="2020-11-12 00:00:00" or ttimestamp<"2020-11-03 00:00:00" then 
+ select "insertion rejected due to constraint violation for Part3 b";
+ leave sp;
+ end if;
+ if ttimestamp>"2020-11-05 00:00:00" then
+ if exists(select * from penna2 where timestamp<"2020-11-05 00:00:00" and precinct=pprecinct and (biden>BBiden or trump>TTrump or totalvotes>ttotalvotes)) then
+ select "insertion rejected due to constraint violation for Part3 c";
+ leave sp;
+ end if;
+end if;
+
+ if ttimestamp<"2020-11-05 00:00:00" then
+ if exists(select * from penna2 where timestamp>"2020-11-05 00:00:00" and precinct=pprecinct and (biden<BBiden or trump<TTrump or totalvotes<ttotalvotes)) then
+ select "insertion rejected due to constraint violation for Part3 c";
+ leave sp;
+ end if;
+ 
+ select "insertion accepted";
+ INSERT INTO `penna2`(Timestamp,precinct,totalvotes,Biden,Trump) 
+VALUES(ttimestamp,pprecinct,ttotalvotes,BBiden,TTrump);
+leave sp;
+end if;
+end if;
+select "unknown table";
+END //
+DELIMITER ;
+
+Call CheckInsert("2020-11-04 03:58:36","P",'Cambria','Adams Township - Dunlo Voting Precinct','42021-ADAMS TWP DUNLO',0,0,0,"Penna1");
+Call CheckInsert("2020-11-04 03:58:36","PA",'Cambria','Adams Township - Dunlo Voting Precinct','42021-ADAMS TWP DUNLO',0,0,0,"Penna1");
+
+Call CheckInsert('2020-11-04 03:58:36',"","",'Adams Township - Dunlo Voting Precinct',"",20,10,10,"Penna2");
+Call CheckInsert('2020-11-04 03:58:37',"","",'AAAAAdams Township - Dunlo Voting Precinct',"",20,10,10,"Penna2");
+Call CheckInsert('2020-11-04 03:58:37',"","",'Adams Township - Dunlo Voting Precinct',"",10,10,10,"Penna2");
+Call CheckInsert('2020-11-02 03:58:37',"","",'Adams Township - Dunlo Voting Precinct',"",20,10,10,"Penna2");
+Call CheckInsert('2020-11-04 03:58:37',"","",'Adams Township - Dunlo Voting Precinct',"",20000,10000,10000,"Penna2");
+Call CheckInsert('2020-11-04 03:58:37',"","",'Adams Township - Dunlo Voting Precinct',"",20,10,10,"Penna2");
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+drop procedure if exists CheckDeletion;
+DELIMITER //
+CREATE PROCEDURE CheckDeletion(
+IN 
+ttimestamp DATETIME , 
+  sstate VARCHAR(45) , 
+  llocality VARCHAR(45) , 
+  pprecinct VARCHAR(45) , 
+  ggeo VARCHAR(45) , 
+  ttotalvotes INT , 
+  BBiden INT , 
+  TTrump INT,
+  ttable varchar(45))
+sp:BEGIN
+if ttable="penna1" then
+
+if exists(select * from penna2 where precinct=pprecinct) then
+ select "Deletion rejected due to constraint violation for foreign key in penna2";
+leave sp;
+end if;
+select "Deletion accepted";
+Delete from `penna1` where state=sstate and locality=llocality and precinct=pprecinct and geo=ggeo;
+leave sp;
+end if;
+
+if ttable="penna2" then
+select "Deletion accepted";
+Delete from `penna2` where timestamp=ttimestamp and precinct=pprecinct and totalvotes=ttotalvotes and Biden=BBiden and Trump=TTrump;
+leave sp;
+end if;
+
+select "unknown table";
+END //
+DELIMITER ;
+Call CheckDeletion("2020-11-04 03:58:36","PA",'Cambria','Adams Township No. 1 Voting Precinct','42021-ADAMS TWP 1',0,0,0,"Penna1");
+
+Call CheckDeletion('2020-11-04 03:58:36',"","",'Adams Township - St. Michael Voting Precinct',"",490,113,372,"Penna2");
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+drop procedure if exists CheckUpdate;
+DELIMITER //
+CREATE PROCEDURE CheckUpdate(
+IN 
+ttimestamp DATETIME , 
+  sstate VARCHAR(45) ,
+  llocality VARCHAR(45) , 
+  pprecinct VARCHAR(45) , 
+  ggeo VARCHAR(45) , 
+  ttotalvotes INT , 
+  BBiden INT , 
+  TTrump INT,
+  tttimestamp DATETIME , 
+  ssstate VARCHAR(45) ,
+  lllocality VARCHAR(45) , 
+  ppprecinct VARCHAR(45) , 
+  gggeo VARCHAR(45) , 
+  tttotalvotes INT , 
+  BBBiden INT , 
+  TTTrump INT,
+  ttable varchar(45))
+sp:BEGIN
+if ttable="penna1" then
+if exists(select * from penna1 where precinct=ppprecinct and pprecinct!=ppprecinct and (locality!=lllocality or geo!=gggeo or state!=ssstate)) then
+ select "Update rejected due to constraint violation for primary key";
+leave sp;
+end if;
+if exists(select * from penna2 where precinct=pprecinct) and pprecinct!=ppprecinct then
+ select "Update rejected due to constraint violation for foreign key in penna2";
+ leave sp;
+end if;
+select "Update accepted";
+Update `penna1`
+set state=ssstate,locality=lllocality,precinct=ppprecinct,geo=gggeo
+where state=sstate and locality=llocality and precinct=pprecinct and geo=ggeo;
+leave sp;
+end if;
+
+if ttable="penna2" then
+if exists(select * from penna2 where precinct=ppprecinct and timestamp=tttimestamp and 
+(totalvotes!=tttotalvotes or Biden!=BBBiden or TTTrump!=Trump)) and (pprecinct!=ppprecinct or ttimestamp!=tttimestamp) then
+ select "Update rejected due to constraint violation for primary key";
+leave sp;
+ end if;
+ if ppprecinct not in (select precinct from penna1) then
+ select "Update rejected due to constraint violation for foreign key";
+ leave sp;
+ end if;
+ if TTTrump+BBBiden>tttotalvotes then
+ select "Update rejected due to constraint violation for Part3 a";
+ leave sp;
+ end if;
+ if tttimestamp>="2020-11-12 00:00:00" or tttimestamp<"2020-11-03 00:00:00" then 
+ select "insertion rejected due to constraint violation for Part3 b";
+ leave sp;
+ end if;
+ 
+ if tttimestamp>"2020-11-05 00:00:00" then
+ if exists(select * from penna2 p where p.timestamp <"2020-11-05 00:00:00" and p.precinct=ppprecinct and (p.biden>BBBiden or p.trump>TTTrump or p.totalvotes>tttotalvotes))  then
+ select "Update rejected due to constraint violation for Part3 c";
+ leave sp;
+ end if;
+end if;
+
+ if tttimestamp<"2020-11-05 00:00:00" then
+ if exists(select * from penna2 p where p.timestamp>"2020-11-05 00:00:00" and p.precinct=ppprecinct and (p.biden<BBBiden or p.trump<TTTrump or p.totalvotes<tttotalvotes))  then
+ select "Update rejected due to constraint violation for Part3 c";
+ leave sp;
+ end if;
+ end if;
+ 
+ select "Update accepted";
+Update `penna2`
+set timestamp=tttimestamp,precinct=ppprecinct,totalvotes=tttotalvotes,Biden=BBBiden,Trump=TTTrump
+where timestamp=ttimestamp and precinct=pprecinct and totalvotes=ttotalvotes and Biden=BBiden and Trump=TTrump;
+leave sp;
+end if;
+select "unknown table";
+END //
+DELIMITER ;
+
+Call CheckUpdate("2020-11-04 03:58:36","PA",'Cambria','Adams Township - Dunlo Voting Precinct','42021-ADAMS TWP DUNLO',0,0,0,
+"2020-11-04 03:58:36","PA",'Cambriaa','Adams Township - Elton Voting Precinct','42021-ADAMS TWP DUNLO',0,0,0,"Penna1");
+
+Call CheckUpdate("2020-11-04 03:58:36","PA",'Cambria','Adams Township - Dunlo Voting Precinct','42021-ADAMS TWP DUNLO',0,0,0,
+"2020-11-04 03:58:36","PA",'Cambria','testcase','42021-ADAMS TWP DUNLO',0,0,0,"Penna1");
+
+Call CheckUpdate("2020-11-04 03:58:36","PA",'Cambria','Adams Township - Dunlo Voting Precinct','42021-ADAMS TWP DUNLO',0,0,0,
+"2020-11-04 03:58:36","PA",'Cambriaa','Adams Township - Dunlo Voting Precinct','42021-ADAMS TWP DUNLO',0,0,0,"Penna1");
+
+Call CheckUpdate('2020-11-04 03:58:36',"","",'Adams Township - St. Michael Voting Precinct',"",490,113,372,
+'2020-11-04 03:58:36',"","",'Adams Township - Dunlo Voting Precinct',"",20,10,10,"Penna2");
+
+Call CheckUpdate('2020-11-04 03:58:36',"","",'Adams Township - St. Michael Voting Precinct',"",490,113,372,
+'2020-11-04 03:58:36',"","",'testcase',"",20,10,10,"Penna2");
+
+Call CheckUpdate('2020-11-04 03:58:36',"","",'Adams Township - St. Michael Voting Precinct',"",490,113,372,
+'2020-11-04 03:58:36',"","",'Adams Township - St. Michael Voting Precinct',"",20,20,10,"Penna2");
+
+Call CheckUpdate('2020-11-04 03:58:36',"","",'Adams Township - St. Michael Voting Precinct',"",490,113,372,
+'2020-11-20 03:58:36',"","",'Adams Township - St. Michael Voting Precinct',"",490,113,372,"Penna2");
+
+Call CheckUpdate('2020-11-04 03:58:36',"","",'Adams Township - St. Michael Voting Precinct',"",490,113,372,
+'2020-11-04 03:58:36',"","",'Adams Township - St. Michael Voting Precinct',"",100000,0,0,"Penna2");
+
+Call CheckUpdate('2020-11-04 03:58:36',"","",'Adams Township - St. Michael Voting Precinct',"",490,113,372,
+'2020-11-04 03:58:36',"","",'Adams Township - St. Michael Voting Precinct',"",491,113,372,"Penna2");
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+a)
+drop table if exists pennacopy;
+create table pennacopy as(select * from penna);
+
+drop table if exists `InsertedTuples`;
+CREATE TABLE `testDB`.`InsertedTuples` ( 
+  `ID` INT NULL,
+  `Timestamp` DATETIME NULL, 
+  `state` VARCHAR(45) NULL, 
+  `locality` VARCHAR(45) NULL, 
+  `precinct` VARCHAR(45) NULL, 
+  `geo` VARCHAR(45) NULL, 
+  `totalvotes` INT NULL, 
+  `Biden` INT NULL, 
+  `Trump` INT NULL
+  );
+
+use testdb;
+Drop Trigger if exists Insertdata;
+DELIMITER $$
+CREATE TRIGGER Insertdata
+	AFTER insert On pennacopy
+	FOR EACH ROW
+BEGIN
+INSERT INTO `InsertedTuples`(ID,Timestamp,state,locality,precinct,geo,totalvotes,Biden,Trump) 
+VALUES(new.ID,new.Timestamp,new.state,new.locality,new.precinct,new.geo,new.totalvotes,new.Biden,new.Trump);
+END$$
+DELIMITER ;
+insert into pennacopy(ID) values(222)
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+a)
+drop table if exists pennacopy;
+create table pennacopy as(select * from penna);
+drop table if exists DeletedTuples;
+CREATE TABLE `testDB`.`DeletedTuples` ( 
+  `ID` INT NULL,
+  `Timestamp` DATETIME NULL, 
+  `state` VARCHAR(45) NULL, 
+  `locality` VARCHAR(45) NULL, 
+  `precinct` VARCHAR(45) NULL, 
+  `geo` VARCHAR(45) NULL, 
+  `totalvotes` INT NULL, 
+  `Biden` INT NULL, 
+  `Trump` INT NULL
+  );
+
+use testdb;
+Drop Trigger if exists Deletedata;
+DELIMITER $$
+CREATE TRIGGER Deletedata
+	AFTER delete On pennacopy
+	FOR EACH ROW
+BEGIN
+INSERT INTO DeletedTuples(ID,Timestamp,state,locality,precinct,geo,totalvotes,Biden,Trump) 
+VALUES(old.ID,old.Timestamp,old.state,old.locality,old.precinct,old.geo,old.totalvotes,old.Biden,old.Trump);
+END$$
+DELIMITER ;
+
+
+DELETE FROM pennacopy WHERE precinct='Adams Township - Elton Voting Precinct';
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+a)
+drop table if exists pennacopy;
+create table pennacopy as(select * from penna);
+
+drop table if exists UpdatedTuples;
+CREATE TABLE `testDB`.`UpdatedTuples` ( 
+  `ID` INT NULL,
+  `Timestamp` DATETIME NULL, 
+  `state` VARCHAR(45) NULL, 
+  `locality` VARCHAR(45) NULL, 
+  `precinct` VARCHAR(45) NULL, 
+  `geo` VARCHAR(45) NULL, 
+  `totalvotes` INT NULL, 
+  `Biden` INT NULL, 
+  `Trump` INT NULL
+  );
+
+use testdb;
+Drop Trigger if exists Updatedata;
+DELIMITER $$
+CREATE TRIGGER Updatedata
+	AFTER UPDATE On pennacopy
+	FOR EACH ROW
+BEGIN
+INSERT INTO UpdatedTuples(ID,Timestamp,state,locality,precinct,geo,totalvotes,Biden,Trump) 
+VALUES(old.ID,old.Timestamp,old.state,old.locality,old.precinct,old.geo,old.totalvotes,old.Biden,old.Trump);
+END$$
+DELIMITER ;
+
+update pennacopy set ID=5 where ID=4
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+b)
+drop table if exists pennacopy;
+create table pennacopy as(select * from penna);
+
+drop procedure if exists MoveVotes;
+DELIMITER //
+CREATE PROCEDURE MoveVotes(
+IN Precinct VARCHAR(255),
+  Timest DATETIME, 
+  CoreCandidate VARCHAR(45), 
+  Number_of_Moved_Votes int)
+sp:BEGIN
+if not exists(select * from pennacopy p where p.precinct=Precinct and p.timestamp=Timest) 
+	then select "unknow timestamp";
+    leave sp;
+    end if;
+
+if CoreCandidate="Trump" then
+ if not exists(select * from pennacopy p where p.precinct=Precinct and p.timestamp=Timest and p.trump>Number_of_Moved_Votes) then
+ select "not enough votes";
+ leave sp;
+end if;
+UPDATE pennacopy
+SET Trump=trump-Number_of_Moved_Votes, Biden=Biden+Number_of_Moved_Votes
+WHERE timestamp<=Timest;
+end if;
+
+if CoreCandidate="Biden" then
+ if not exists(select * from pennacopy p where p.precinct=Precinct and p.timestamp=Timest and p.biden>Number_of_Moved_Votes) then
+ select "not enough votes";
+ leave sp;
+end if;
+UPDATE pennacopy
+SET Trump=trump+Number_of_Moved_Votes, Biden=Biden-Number_of_Moved_Votes
+WHERE timestamp<=Timest;
+end if;
+
+if CoreCandidate!="Trump" and CoreCandidate!="Biden" then select "Wrong candidate"; leave sp; end if;
+
+END //
+DELIMITER ;
+
+call MoveVotes('Adams Township - Dunlo Voting Precinct','2020-11-04 03:58:36','Trump',100)
